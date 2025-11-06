@@ -1,0 +1,32 @@
+# dependencies
+node_modules/
+
+# builds / artifacts
+/dist/
+/build/
+/out/
+/release/
+
+# electron packaged binaries
+/electron/dist/
+
+# logs & caches
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store
+Thumbs.db
+
+# vite cache
+/.vite/
+
+# env
+.env
+.env.*
+
+# editor
+.vscode/
+.idea/
+
+

@@ -1,0 +1,30 @@
+:root { color-scheme: dark; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: Inter, system-ui, Arial, sans-serif; background: #121212; color: #e5e5e5; }
+.app { display: grid; grid-template-rows: 56px 1fr 96px; height: 100vh; }
+.topbar { display: flex; align-items: center; justify-content: space-between; padding: 0 16px; background: #181818; border-bottom: 1px solid #2a2a2a; }
+.brand { font-weight: 700; letter-spacing: 0.5px; }
+.actions { display: flex; gap: 8px; }
+.btn { background: #1db954; color: #000; border: none; padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: 600; }
+.btn.secondary { background: #2a2a2a; color: #fff; }
+.content { display: grid; grid-template-columns: 240px 1fr; min-height: 0; }
+.sidebar { background: #0f0f0f; border-right: 1px solid #2a2a2a; padding: 12px; }
+.menu { color: #aaa; font-weight: 600; text-transform: uppercase; font-size: 12px; }
+.library { overflow: auto; }
+.empty { padding: 24px; color: #aaa; }
+.tracklist { list-style: none; margin: 0; padding: 0; }
+.tracklist li { display: grid; grid-template-columns: 40px 1fr; gap: 12px; padding: 10px 16px; border-bottom: 1px solid #1e1e1e; cursor: default; }
+.tracklist li:hover { background: #191919; }
+.tracklist li.active { background: #202020; }
+.idx { color: #888; width: 24px; text-align: right; }
+.title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.player { display: grid; grid-template-columns: 1fr 2fr 1fr; align-items: center; gap: 16px; padding: 12px 16px; background: #181818; border-top: 1px solid #2a2a2a; }
+.controls { display: flex; gap: 12px; align-items: center; justify-content: center; }
+.icon { background: #2a2a2a; color: #fff; border: none; border-radius: 999px; padding: 8px 12px; cursor: pointer; }
+.icon.big { padding: 10px 16px; font-size: 18px; }
+.progress { display: flex; align-items: center; gap: 8px; }
+.progress input[type="range"] { width: 100%; }
+.time { font-variant-numeric: tabular-nums; color: #aaa; font-size: 12px; }
+.volume { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
+
+
