@@ -21,6 +21,7 @@ export default function App() {
 	const [volume, setVolume] = useState(1);
 	const [isLoading, setIsLoading] = useState(false);
 	const [loadError, setLoadError] = useState(null);
+	const [searchQuery, setSearchQuery] = useState('');
 	const shouldAutoPlayRef = useRef(false);
 	const blobUrlsRef = useRef(new Set());
 
@@ -40,6 +41,14 @@ export default function App() {
 		const serializableTracks = tracks.filter((t) => !!t.path).map((t) => ({ id: t.id, path: t.path, title: t.title }));
 		localStorage.setItem('boombox:library', JSON.stringify({ tracks: serializableTracks, playlists }));
 	}, [tracks, playlists]);
+
+	// Switch to library view when user starts searching
+	useEffect(() => {
+		if (searchQuery.trim() && activeView !== 'library') {
+			setActiveView('library');
+			setSelectedPlaylistId('all'); // Show all tracks when searching
+		}
+	}, [searchQuery, activeView]);
 
 	function handleAddFiles() {
 		if (!window.boombox?.openFiles) return;
@@ -76,12 +85,27 @@ export default function App() {
 	}
 
 	const visibleTracks = useMemo(() => {
-		if (selectedPlaylistId === 'all') return tracks;
-		const pl = playlists.find((p) => p.id === selectedPlaylistId);
-		if (!pl) return tracks;
-		const idSet = new Set(pl.trackIds);
-		return tracks.filter((t) => idSet.has(t.id));
-	}, [tracks, playlists, selectedPlaylistId]);
+		let filtered = tracks;
+		
+		// Filter by playlist if one is selected
+		if (selectedPlaylistId !== 'all') {
+			const pl = playlists.find((p) => p.id === selectedPlaylistId);
+			if (pl) {
+				const idSet = new Set(pl.trackIds);
+				filtered = filtered.filter((t) => idSet.has(t.id));
+			}
+		}
+		
+		// Filter by search query if provided
+		if (searchQuery.trim()) {
+			const query = searchQuery.toLowerCase().trim();
+			filtered = filtered.filter((t) => 
+				t.title.toLowerCase().includes(query)
+			);
+		}
+		
+		return filtered;
+	}, [tracks, playlists, selectedPlaylistId, searchQuery]);
 
 	// Preload blob URL for a track
 	async function preloadTrackBlob(track) {
@@ -405,7 +429,22 @@ export default function App() {
 				<div className="flex-1 max-w-xl mx-6">
 					<div className="flex items-center gap-2 bg-neutral-800/80 border border-neutral-700 rounded-lg px-3 py-2">
 						<svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="text-neutral-400"><path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/><circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2"/></svg>
-						<input placeholder="Type here to search" className="bg-transparent outline-none text-sm w-full placeholder:text-neutral-400" />
+						<input 
+							type="text"
+							placeholder="Type here to search" 
+							className="bg-transparent outline-none text-sm w-full placeholder:text-neutral-400" 
+							value={searchQuery}
+							onChange={(e) => setSearchQuery(e.target.value)}
+						/>
+						{searchQuery && (
+							<button 
+								onClick={() => setSearchQuery('')}
+								className="text-neutral-400 hover:text-neutral-200"
+								title="Clear search"
+							>
+								✕
+							</button>
+						)}
 					</div>
 				</div>
 				<div className="flex gap-2">
@@ -427,7 +466,20 @@ export default function App() {
 						<button className={`w-full text-left px-3 py-2 rounded-md ${activeView==='library'?'bg-neutral-800 text-white':'text-neutral-300 hover:bg-neutral-900'}`} onClick={() => setActiveView('library')}>Library</button>
 					</nav>
 					<div>
-						<div className="text-xs uppercase text-neutral-500 px-2 mb-2">Playlists</div>
+						<div className="text-xs uppercase text-neutral-500 px-2 mb-2">Library</div>
+						<button 
+							className={`w-full text-left px-3 py-2 rounded-md mb-2 ${selectedPlaylistId==='all'?'bg-neutral-800 text-white':'text-neutral-300 hover:bg-neutral-900'}`} 
+							onClick={() => { 
+								setSelectedPlaylistId('all'); 
+								setActiveView('library');
+								if (searchQuery.trim()) {
+									// Keep search active when viewing all tracks
+								}
+							}}
+						>
+							All Tracks
+						</button>
+						<div className="text-xs uppercase text-neutral-500 px-2 mb-2 mt-4">Playlists</div>
 						<button className="w-full bg-emerald-600/20 text-emerald-300 border border-emerald-800 px-3 py-2 rounded-md" onClick={createPlaylist}>Create New</button>
 						<ul className="mt-2 space-y-1">
 							{playlists.map((pl) => (
@@ -484,17 +536,47 @@ export default function App() {
 						</div>
 					) : (
 						<div className="p-6">
+							{/* Search header */}
+							{searchQuery.trim() && (
+								<div className="mb-4">
+									<h2 className="text-lg font-semibold mb-1">
+										Search results for "{searchQuery}"
+										{selectedPlaylistId !== 'all' && (
+											<span className="text-sm font-normal text-neutral-400 ml-2">
+												in {playlists.find(p => p.id === selectedPlaylistId)?.name || 'playlist'}
+											</span>
+										)}
+									</h2>
+									<p className="text-sm text-neutral-400">
+										{visibleTracks.length === 0 
+											? 'No tracks found' 
+											: `${visibleTracks.length} ${visibleTracks.length === 1 ? 'track' : 'tracks'} found`
+										}
+									</p>
+								</div>
+							)}
+							
 							{tracks.length === 0 ? (
 								<div className="text-neutral-400">Add some MP3s to start listening.</div>
+							) : visibleTracks.length === 0 && searchQuery.trim() ? (
+								<div className="text-neutral-400 text-center py-8">
+									<p>No tracks found matching "{searchQuery}"</p>
+									<button 
+										onClick={() => setSearchQuery('')}
+										className="mt-2 text-emerald-400 hover:text-emerald-300 text-sm"
+									>
+										Clear search
+									</button>
+								</div>
 							) : (
 								<ul className="divide-y divide-neutral-900">
 									{visibleTracks.map((t, i) => {
 										const globalIndex = tracks.findIndex((x) => x.id === t.id);
 										return (
-											<li key={t.id} className={`grid grid-cols-[48px_1fr_auto] items-center gap-3 px-2 py-3 ${globalIndex===currentIndex?'bg-neutral-900':''}`} onDoubleClick={() => playIndex(globalIndex)}>
+											<li key={t.id} className={`grid grid-cols-[48px_1fr_auto] items-center gap-3 px-2 py-3 hover:bg-neutral-900/50 ${globalIndex===currentIndex?'bg-neutral-900':''}`} onDoubleClick={() => playIndex(globalIndex)}>
 												<span className="text-neutral-500 text-sm text-right">{i + 1}</span>
 												<span className="truncate">{t.title}</span>
-												<button className="text-xs bg-neutral-800 border border-neutral-700 px-2 py-1 rounded" onClick={(e) => { e.stopPropagation(); addToSelectedPlaylist(t.id); }}>Add</button>
+												<button className="text-xs bg-neutral-800 border border-neutral-700 px-2 py-1 rounded hover:bg-neutral-700" onClick={(e) => { e.stopPropagation(); addToSelectedPlaylist(t.id); }}>Add</button>
 											</li>
 										);
 									})}
