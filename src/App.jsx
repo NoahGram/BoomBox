@@ -22,6 +22,9 @@ export default function App() {
 	const [isLoading, setIsLoading] = useState(false);
 	const [loadError, setLoadError] = useState(null);
 	const [searchQuery, setSearchQuery] = useState('');
+	const [showPrompt, setShowPrompt] = useState(false);
+	const [promptConfig, setPromptConfig] = useState({ title: '', defaultValue: '', onConfirm: null });
+	const [toast, setToast] = useState(null);
 	const shouldAutoPlayRef = useRef(false);
 	const blobUrlsRef = useRef(new Set());
 
@@ -69,18 +72,124 @@ export default function App() {
 	}
 
 	function createPlaylist() {
-		const name = prompt('Playlist name?');
-		if (!name) return;
-		const id = `pl-${Date.now()}`;
-		setPlaylists((p) => [...p, { id, name, trackIds: [] }]);
-		setSelectedPlaylistId(id);
+		setPromptConfig({
+			title: 'Create New Playlist',
+			defaultValue: '',
+			onConfirm: (name) => {
+				if (!name || !name.trim()) return;
+				const id = `pl-${Date.now()}`;
+				setPlaylists((p) => [...p, { id, name: name.trim(), trackIds: [] }]);
+				setSelectedPlaylistId(id);
+			}
+		});
+		setShowPrompt(true);
 	}
 
-	function addToSelectedPlaylist(trackId) {
+	function deletePlaylist(playlistId) {
+		const playlist = playlists.find((p) => p.id === playlistId);
+		if (!playlist) return;
+		
+		if (!confirm(`Delete playlist "${playlist.name}"? Tracks will remain in your library.`)) return;
+		
+		setPlaylists((pls) => pls.filter((p) => p.id !== playlistId));
+		
+		// Switch to "All Tracks" if the deleted playlist was selected
+		if (selectedPlaylistId === playlistId) {
+			setSelectedPlaylistId('all');
+		}
+	}
+
+	function renamePlaylist(playlistId) {
+		const playlist = playlists.find((p) => p.id === playlistId);
+		if (!playlist) return;
+		
+		setPromptConfig({
+			title: 'Rename Playlist',
+			defaultValue: playlist.name,
+			onConfirm: (newName) => {
+				if (!newName || !newName.trim() || newName === playlist.name) return;
+				setPlaylists((pls) => pls.map((p) => 
+					p.id === playlistId ? { ...p, name: newName.trim() } : p
+				));
+			}
+		});
+		setShowPrompt(true);
+	}
+
+	function addToSelectedPlaylist(trackId, targetPlaylistId = null) {
+		const playlistId = targetPlaylistId || selectedPlaylistId;
+		if (playlistId === 'all') return;
+		
+		console.log('Adding track to playlist:', { trackId, playlistId, currentPlaylists: playlists });
+		
+		const track = tracks.find(t => t.id === trackId);
+		const playlist = playlists.find(p => p.id === playlistId);
+		
+		if (!track || !playlist) {
+			setToast({ message: '❌ Error: Track or playlist not found', type: 'error' });
+			setTimeout(() => setToast(null), 3000);
+			return;
+		}
+		
+		if (playlist.trackIds.includes(trackId)) {
+			setToast({ message: `"${track.title}" is already in "${playlist.name}"`, type: 'info' });
+			setTimeout(() => setToast(null), 3000);
+			return;
+		}
+		
+		setPlaylists((pls) => {
+			const updated = pls.map((pl) => {
+				if (pl.id === playlistId && !pl.trackIds.includes(trackId)) {
+					console.log('Adding track to playlist:', pl.name);
+					return { ...pl, trackIds: [...pl.trackIds, trackId] };
+				}
+				return pl;
+			});
+			console.log('Updated playlists:', updated);
+			return updated;
+		});
+		
+		setToast({ message: `✓ Added "${track.title}" to "${playlist.name}"`, type: 'success' });
+		setTimeout(() => setToast(null), 3000);
+	}
+
+	function deleteTrack(trackId) {
+		const track = tracks.find(t => t.id === trackId);
+		if (!track) return;
+		
+		if (!confirm(`Delete "${track.title}" from your library? This will remove it from all playlists.`)) return;
+		
+		// Remove from tracks
+		setTracks((prev) => prev.filter((t) => t.id !== trackId));
+		
+		// Remove from all playlists
+		setPlaylists((pls) => pls.map((pl) => ({
+			...pl,
+			trackIds: pl.trackIds.filter((id) => id !== trackId)
+		})));
+		
+		// If this was the current track, stop playback
+		if (currentIndex >= 0 && tracks[currentIndex]?.id === trackId) {
+			const audio = audioRef.current;
+			if (audio) {
+				audio.pause();
+				audio.src = '';
+			}
+			setCurrentIndex(-1);
+			setIsPlaying(false);
+		}
+	}
+
+	function removeFromPlaylist(trackId) {
 		if (selectedPlaylistId === 'all') return;
-		setPlaylists((pls) => pls.map((pl) => pl.id === selectedPlaylistId && !pl.trackIds.includes(trackId)
-			? { ...pl, trackIds: [...pl.trackIds, trackId] }
-			: pl
+		
+		const playlist = playlists.find((p) => p.id === selectedPlaylistId);
+		if (!playlist) return;
+		
+		setPlaylists((pls) => pls.map((pl) => 
+			pl.id === selectedPlaylistId
+				? { ...pl, trackIds: pl.trackIds.filter((id) => id !== trackId) }
+				: pl
 		));
 	}
 
@@ -483,8 +592,30 @@ export default function App() {
 						<button className="w-full bg-emerald-600/20 text-emerald-300 border border-emerald-800 px-3 py-2 rounded-md" onClick={createPlaylist}>Create New</button>
 						<ul className="mt-2 space-y-1">
 							{playlists.map((pl) => (
-								<li key={pl.id}>
-									<button className={`w-full text-left px-3 py-2 rounded-md ${selectedPlaylistId===pl.id?'bg-neutral-800 text-white':'text-neutral-300 hover:bg-neutral-900'}`} onClick={() => { setSelectedPlaylistId(pl.id); setActiveView('library'); }}>{pl.name}</button>
+								<li key={pl.id} className="group relative">
+									<button 
+										className={`w-full text-left px-3 py-2 rounded-md ${selectedPlaylistId===pl.id?'bg-neutral-800 text-white':'text-neutral-300 hover:bg-neutral-900'}`} 
+										onClick={() => { setSelectedPlaylistId(pl.id); setActiveView('library'); }}
+									>
+										{pl.name}
+										<span className="text-xs text-neutral-500 ml-2">({pl.trackIds.length})</span>
+									</button>
+									<div className="absolute right-2 top-1/2 -translate-y-1/2 hidden group-hover:flex gap-1">
+										<button
+											onClick={(e) => { e.stopPropagation(); renamePlaylist(pl.id); }}
+											className="text-xs bg-neutral-700 hover:bg-neutral-600 px-2 py-1 rounded"
+											title="Rename playlist"
+										>
+											✏️
+										</button>
+										<button
+											onClick={(e) => { e.stopPropagation(); deletePlaylist(pl.id); }}
+											className="text-xs bg-red-900/50 hover:bg-red-900 px-2 py-1 rounded"
+											title="Delete playlist"
+										>
+											🗑️
+										</button>
+									</div>
 								</li>
 							))}
 						</ul>
@@ -572,11 +703,78 @@ export default function App() {
 								<ul className="divide-y divide-neutral-900">
 									{visibleTracks.map((t, i) => {
 										const globalIndex = tracks.findIndex((x) => x.id === t.id);
+										const isInCurrentPlaylist = selectedPlaylistId !== 'all' && 
+											playlists.find((p) => p.id === selectedPlaylistId)?.trackIds.includes(t.id);
+										
 										return (
 											<li key={t.id} className={`grid grid-cols-[48px_1fr_auto] items-center gap-3 px-2 py-3 hover:bg-neutral-900/50 ${globalIndex===currentIndex?'bg-neutral-900':''}`} onDoubleClick={() => playIndex(globalIndex)}>
 												<span className="text-neutral-500 text-sm text-right">{i + 1}</span>
 												<span className="truncate">{t.title}</span>
-												<button className="text-xs bg-neutral-800 border border-neutral-700 px-2 py-1 rounded hover:bg-neutral-700" onClick={(e) => { e.stopPropagation(); addToSelectedPlaylist(t.id); }}>Add</button>
+												<div className="flex gap-2">
+													{selectedPlaylistId === 'all' ? (
+														<>
+															{/* Add to Playlist Dropdown */}
+															<div className="relative group/playlist">
+																<button 
+																	className="text-xs bg-emerald-800/50 border border-emerald-700 px-2 py-1 rounded hover:bg-emerald-800" 
+																	title="Add to playlist"
+																>
+																	+ Playlist
+																</button>
+																{playlists.length > 0 && (
+																	<div className="absolute right-0 top-full mt-1 bg-neutral-800 border border-neutral-700 rounded-lg shadow-xl py-1 min-w-[150px] opacity-0 invisible group-hover/playlist:opacity-100 group-hover/playlist:visible transition-all duration-150 z-10">
+																		{playlists.map((pl) => (
+																			<button
+																				key={pl.id}
+																				className="w-full text-left px-3 py-2 text-xs hover:bg-neutral-700 whitespace-nowrap"
+																				onClick={(e) => { 
+																					e.stopPropagation(); 
+																					addToSelectedPlaylist(t.id, pl.id);
+																				}}
+																			>
+																				{pl.name} ({pl.trackIds.length})
+																			</button>
+																		))}
+																	</div>
+																)}
+															</div>
+															<button 
+																className="text-xs bg-red-900/50 border border-red-800 px-2 py-1 rounded hover:bg-red-900" 
+																onClick={(e) => { e.stopPropagation(); deleteTrack(t.id); }}
+																title="Delete from library"
+															>
+																🗑️
+															</button>
+														</>
+													) : (
+														<>
+															{isInCurrentPlaylist ? (
+																<button 
+																	className="text-xs bg-orange-900/50 border border-orange-800 px-2 py-1 rounded hover:bg-orange-900" 
+																	onClick={(e) => { e.stopPropagation(); removeFromPlaylist(t.id); }}
+																	title="Remove from this playlist"
+																>
+																	Remove
+																</button>
+															) : (
+																<button 
+																	className="text-xs bg-emerald-800/50 border border-emerald-700 px-2 py-1 rounded hover:bg-emerald-800" 
+																	onClick={(e) => { e.stopPropagation(); addToSelectedPlaylist(t.id); }}
+																	title="Add to this playlist"
+																>
+																	+ Add
+																</button>
+															)}
+															<button 
+																className="text-xs bg-red-900/50 border border-red-800 px-2 py-1 rounded hover:bg-red-900" 
+																onClick={(e) => { e.stopPropagation(); deleteTrack(t.id); }}
+																title="Delete from library"
+															>
+																🗑️
+															</button>
+														</>
+													)}
+												</div>
 											</li>
 										);
 									})}
@@ -646,6 +844,61 @@ export default function App() {
 					<div className="col-span-3 text-xs text-red-400 text-center">{loadError}</div>
 				)}
 			</footer>
+
+			{/* Custom Prompt Modal */}
+			{showPrompt && (
+				<div className="fixed inset-0 bg-black/70 backdrop-blur-sm grid place-items-center z-50" onClick={() => setShowPrompt(false)}>
+					<div className="bg-neutral-900 border border-neutral-700 rounded-2xl p-6 w-full max-w-md shadow-2xl" onClick={(e) => e.stopPropagation()}>
+						<h3 className="text-lg font-semibold mb-4">{promptConfig.title}</h3>
+						<input
+							type="text"
+							defaultValue={promptConfig.defaultValue}
+							placeholder="Enter name..."
+							className="w-full bg-neutral-800 border border-neutral-700 rounded-lg px-4 py-2 mb-4 outline-none focus:border-emerald-500 transition"
+							autoFocus
+							onKeyDown={(e) => {
+								if (e.key === 'Enter') {
+									promptConfig.onConfirm(e.target.value);
+									setShowPrompt(false);
+								} else if (e.key === 'Escape') {
+									setShowPrompt(false);
+								}
+							}}
+						/>
+						<div className="flex gap-2 justify-end">
+							<button
+								className="bg-neutral-800 border border-neutral-700 px-4 py-2 rounded-md hover:bg-neutral-700 transition"
+								onClick={() => setShowPrompt(false)}
+							>
+								Cancel
+							</button>
+							<button
+								className="bg-emerald-500 text-black px-4 py-2 rounded-md font-semibold hover:bg-emerald-600 transition"
+								onClick={(e) => {
+									const input = e.target.parentElement.previousElementSibling;
+									promptConfig.onConfirm(input.value);
+									setShowPrompt(false);
+								}}
+							>
+								Confirm
+							</button>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* Toast Notification */}
+			{toast && (
+				<div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 animate-slide-up">
+					<div className={`px-6 py-3 rounded-lg shadow-2xl border ${
+						toast.type === 'success' ? 'bg-emerald-900/90 border-emerald-700 text-emerald-100' :
+						toast.type === 'error' ? 'bg-red-900/90 border-red-700 text-red-100' :
+						'bg-neutral-800/90 border-neutral-700 text-neutral-100'
+					} backdrop-blur-sm`}>
+						{toast.message}
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }

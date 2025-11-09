@@ -20,6 +20,11 @@ function createWindow() {
 	const devServerUrl = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
 	mainWindow.loadURL(devServerUrl);
 
+	// Open DevTools in development mode
+	if (process.env.VITE_DEV_SERVER_URL) {
+		mainWindow.webContents.openDevTools();
+	}
+
 	mainWindow.on('closed', () => {
 		mainWindow = null;
 	});
