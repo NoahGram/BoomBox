@@ -19,6 +19,10 @@ export default function App() {
 	const [currentTime, setCurrentTime] = useState(0);
 	const [duration, setDuration] = useState(0);
 	const [volume, setVolume] = useState(1);
+	const [isLoading, setIsLoading] = useState(false);
+	const [loadError, setLoadError] = useState(null);
+	const shouldAutoPlayRef = useRef(false);
+	const blobUrlsRef = useRef(new Set());
 
 	const currentTrack = useMemo(() => tracks[currentIndex] || null, [tracks, currentIndex]);
 
@@ -79,59 +83,297 @@ export default function App() {
 		return tracks.filter((t) => idSet.has(t.id));
 	}, [tracks, playlists, selectedPlaylistId]);
 
-	function getSrc(track) {
-		if (!track) return undefined;
-		if (srcMap[track.id]) return srcMap[track.id];
-		if (track.file) {
-			const url = URL.createObjectURL(track.file);
-			setSrcMap((m) => ({ ...m, [track.id]: url }));
-			return url;
-		}
-		if (track.path && window.boombox?.readAudio) {
-			window.boombox.readAudio(track.path).then((buf) => {
-				const bytes = new Uint8Array(buf);
-				const blob = new Blob([bytes], { type: 'audio/mpeg' });
-				const url = URL.createObjectURL(blob);
-				setSrcMap((m) => ({ ...m, [track.id]: url }));
+	// Preload blob URL for a track
+	async function preloadTrackBlob(track) {
+		if (!track) return null;
+		
+		// Check if already loaded and URL is still valid
+		const existingUrl = srcMap[track.id];
+		if (existingUrl) {
+			// Verify URL is still valid by checking if it's in our ref
+			if (blobUrlsRef.current.has(existingUrl)) {
+				return existingUrl;
+			}
+			// URL was revoked, remove from map and recreate
+			setSrcMap((m) => {
+				const newMap = { ...m };
+				delete newMap[track.id];
+				return newMap;
 			});
 		}
-		return undefined;
+		
+		try {
+			let blob;
+			if (track.file) {
+				// File object from input
+				blob = track.file;
+			} else if (track.path && window.boombox?.readAudio) {
+				// File path - read via IPC
+				setIsLoading(true);
+				setLoadError(null);
+				const buf = await window.boombox.readAudio(track.path);
+				const bytes = new Uint8Array(buf);
+				// Detect MIME type from extension
+				const ext = track.path.split('.').pop()?.toLowerCase();
+				const mimeTypes = {
+					mp3: 'audio/mpeg',
+					wav: 'audio/wav',
+					ogg: 'audio/ogg',
+					m4a: 'audio/mp4',
+					flac: 'audio/flac',
+				};
+				const mimeType = mimeTypes[ext] || 'audio/mpeg';
+				blob = new Blob([bytes], { type: mimeType });
+			} else {
+				return null;
+			}
+			
+			const url = URL.createObjectURL(blob);
+			blobUrlsRef.current.add(url);
+			setSrcMap((m) => ({ ...m, [track.id]: url }));
+			setIsLoading(false);
+			return url;
+		} catch (error) {
+			console.error('Failed to load audio:', error);
+			setLoadError(`Failed to load: ${track.title}`);
+			setIsLoading(false);
+			return null;
+		}
 	}
 
-	function playPause() {
+	// Preload blob URL when track changes
+	useEffect(() => {
+		if (!currentTrack) {
+			const audio = audioRef.current;
+			if (audio) {
+				audio.pause();
+				audio.src = '';
+				setIsPlaying(false);
+				setCurrentTime(0);
+				setDuration(0);
+			}
+			return;
+		}
+
+		let cancelled = false;
+		setIsLoading(true);
+		setLoadError(null);
+
+		preloadTrackBlob(currentTrack).then(async (url) => {
+			if (cancelled || !url) return;
+			
+			const audio = audioRef.current;
+			if (!audio) return;
+
+			// Pause current playback if any
+			if (!audio.paused) {
+				audio.pause();
+			}
+
+			// Set new source (don't revoke old URL - keep it cached for replay)
+			audio.src = url;
+			audio.load(); // Force reload
+
+			// Reset state
+			setCurrentTime(0);
+			setDuration(0);
+			setIsPlaying(false);
+
+			// Auto-play if requested
+			if (shouldAutoPlayRef.current) {
+				shouldAutoPlayRef.current = false;
+				// Wait for audio to be ready
+				await new Promise((resolve) => {
+					const tryPlay = async () => {
+						try {
+							if (audio.readyState >= 2) {
+								await audio.play();
+								audio.removeEventListener('canplay', tryPlay);
+								resolve();
+							}
+						} catch (err) {
+							console.error('Auto-play failed:', err);
+							audio.removeEventListener('canplay', tryPlay);
+							resolve();
+						}
+					};
+					audio.addEventListener('canplay', tryPlay);
+					// Try immediately if already ready
+					if (audio.readyState >= 2) {
+						tryPlay();
+					}
+					// Fallback timeout
+					setTimeout(resolve, 5000);
+				});
+			}
+		});
+
+		return () => {
+			cancelled = true;
+		};
+	}, [currentTrack?.id]);
+
+	// Set volume on audio element
+	useEffect(() => {
+		const audio = audioRef.current;
+		if (audio) {
+			audio.volume = volume;
+		}
+	}, [volume]);
+
+	// Sync audio state with element events
+	useEffect(() => {
 		const audio = audioRef.current;
 		if (!audio) return;
-		if (audio.paused) {
-			audio.play();
-			setIsPlaying(true);
-		} else {
-			audio.pause();
+
+		const handlePlay = () => setIsPlaying(true);
+		const handlePause = () => setIsPlaying(false);
+		const handleEnded = () => {
+			setIsPlaying(false);
+			setCurrentTime(0);
+			// Auto-play next track
+			if (tracks.length > 0) {
+				const nextIndex = (currentIndex + 1) % tracks.length;
+				shouldAutoPlayRef.current = true;
+				setCurrentIndex(nextIndex);
+			}
+		};
+		const handleError = (e) => {
+			console.error('Audio error:', e);
+			setLoadError('Failed to play audio');
+			setIsPlaying(false);
+		};
+		const handleLoadedMetadata = () => {
+			setDuration(audio.duration || 0);
+			setIsLoading(false);
+		};
+		const handleCanPlay = () => {
+			setIsLoading(false);
+		};
+		const handleWaiting = () => setIsLoading(true);
+		const handleCanPlayThrough = () => setIsLoading(false);
+
+		audio.addEventListener('play', handlePlay);
+		audio.addEventListener('pause', handlePause);
+		audio.addEventListener('ended', handleEnded);
+		audio.addEventListener('error', handleError);
+		audio.addEventListener('loadedmetadata', handleLoadedMetadata);
+		audio.addEventListener('canplay', handleCanPlay);
+		audio.addEventListener('waiting', handleWaiting);
+		audio.addEventListener('canplaythrough', handleCanPlayThrough);
+
+		return () => {
+			audio.removeEventListener('play', handlePlay);
+			audio.removeEventListener('pause', handlePause);
+			audio.removeEventListener('ended', handleEnded);
+			audio.removeEventListener('error', handleError);
+			audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+			audio.removeEventListener('canplay', handleCanPlay);
+			audio.removeEventListener('waiting', handleWaiting);
+			audio.removeEventListener('canplaythrough', handleCanPlayThrough);
+		};
+	}, [tracks.length, currentIndex]);
+
+	// Cleanup blob URLs for tracks that have been removed from library
+	useEffect(() => {
+		const trackIds = new Set(tracks.map(t => t.id));
+		
+		// Clean up blob URLs for tracks that no longer exist
+		setSrcMap((m) => {
+			const newMap = { ...m };
+			let hasChanges = false;
+			
+			Object.entries(m).forEach(([trackId, url]) => {
+				if (!trackIds.has(trackId)) {
+					// Track was removed, clean up its blob URL
+					blobUrlsRef.current.delete(url);
+					try {
+						URL.revokeObjectURL(url);
+					} catch (e) {
+						// Ignore errors during cleanup
+					}
+					delete newMap[trackId];
+					hasChanges = true;
+				}
+			});
+			
+			return hasChanges ? newMap : m;
+		});
+	}, [tracks.map(t => t.id).join(',')]); // Only depend on track IDs, not full objects
+
+	// Cleanup blob URLs on unmount
+	useEffect(() => {
+		return () => {
+			// Cleanup all blob URLs on unmount
+			blobUrlsRef.current.forEach((url) => {
+				try {
+					URL.revokeObjectURL(url);
+				} catch (e) {
+					// Ignore errors during cleanup
+				}
+			});
+			blobUrlsRef.current.clear();
+		};
+	}, []); // Only run cleanup on unmount
+
+	async function playPause() {
+		const audio = audioRef.current;
+		if (!audio || !currentTrack) return;
+
+		try {
+			if (audio.paused) {
+				// Wait for audio to be ready
+				if (audio.readyState < 2) {
+					setIsLoading(true);
+					await new Promise((resolve) => {
+						const checkReady = () => {
+							if (audio.readyState >= 2) {
+								audio.removeEventListener('canplay', checkReady);
+								resolve();
+							}
+						};
+						audio.addEventListener('canplay', checkReady);
+						// Fallback timeout
+						setTimeout(resolve, 5000);
+					});
+				}
+
+				await audio.play();
+				// State will be updated by event listener
+			} else {
+				audio.pause();
+				// State will be updated by event listener
+			}
+		} catch (error) {
+			console.error('Playback error:', error);
+			setLoadError('Failed to play audio. Try clicking play again.');
 			setIsPlaying(false);
 		}
 	}
 
 	function playIndex(index) {
 		if (index < 0 || index >= tracks.length) return;
+		// Stop current playback
+		const audio = audioRef.current;
+		if (audio && !audio.paused) {
+			audio.pause();
+		}
+		shouldAutoPlayRef.current = true;
 		setCurrentIndex(index);
-		setTimeout(() => {
-			if (audioRef.current) {
-				audioRef.current.play();
-				setIsPlaying(true);
-			}
-		}, 0);
+		// Audio will auto-play when loaded via useEffect
 	}
 
-	function next() {
+	const next = React.useCallback(() => {
 		if (!tracks.length) return;
 		const nextIndex = (currentIndex + 1) % tracks.length;
 		playIndex(nextIndex);
-	}
+	}, [tracks.length, currentIndex]);
 
-	function prev() {
+	const prev = React.useCallback(() => {
 		if (!tracks.length) return;
 		const prevIndex = (currentIndex - 1 + tracks.length) % tracks.length;
 		playIndex(prevIndex);
-	}
+	}, [tracks.length, currentIndex]);
 
 	function onTimeUpdate() {
 		const a = audioRef.current;
@@ -266,19 +508,30 @@ export default function App() {
 				<aside className="hidden md:block border-l border-neutral-900 bg-neutral-950 p-4">
 					<div className="bg-neutral-900/70 border border-neutral-800 rounded-2xl p-4">
 						<div className="h-40 rounded-xl bg-gradient-to-br from-neutral-700 to-neutral-900 mb-4 grid place-items-center">
-							<span className="text-3xl">🎵</span>
+							{isLoading ? (
+								<span className="text-2xl animate-pulse">⏳</span>
+							) : (
+								<span className="text-3xl">🎵</span>
+							)}
 						</div>
 						<div className="font-semibold text-lg truncate">{(tracks[currentIndex]?.title) || 'No track selected'}</div>
-						<div className="text-xs text-neutral-400 mb-4">Local</div>
+						<div className="text-xs text-neutral-400 mb-4">
+							{isLoading ? 'Loading...' : loadError ? 'Error' : 'Local'}
+						</div>
+						{loadError && (
+							<div className="text-xs text-red-400 mb-2">{loadError}</div>
+						)}
 						<div className="flex items-center gap-2">
 							<span className="text-xs text-neutral-500">{formatTime(currentTime)}</span>
-							<input className="w-full" type="range" min="0" max={duration || 0} step="0.1" value={currentTime} onChange={onSeek} />
+							<input className="w-full" type="range" min="0" max={duration || 0} step="0.1" value={currentTime} onChange={onSeek} disabled={isLoading} />
 							<span className="text-xs text-neutral-500">{formatTime(duration)}</span>
 						</div>
 						<div className="flex items-center justify-center gap-3 mt-3">
-							<button className="bg-neutral-800 border border-neutral-700 px-3 py-2 rounded-full" onClick={prev}>⏮</button>
-							<button className="bg-emerald-500 text-black px-4 py-2 rounded-full text-base font-semibold" onClick={playPause}>{isPlaying ? 'Pause' : 'Play'}</button>
-							<button className="bg-neutral-800 border border-neutral-700 px-3 py-2 rounded-full" onClick={next}>⏭</button>
+							<button className="bg-neutral-800 border border-neutral-700 px-3 py-2 rounded-full disabled:opacity-50" onClick={prev} disabled={!currentTrack || tracks.length === 0}>⏮</button>
+							<button className="bg-emerald-500 text-black px-4 py-2 rounded-full text-base font-semibold disabled:opacity-50" onClick={playPause} disabled={!currentTrack || isLoading}>
+								{isLoading ? '⏳' : (isPlaying ? 'Pause' : 'Play')}
+							</button>
+							<button className="bg-neutral-800 border border-neutral-700 px-3 py-2 rounded-full disabled:opacity-50" onClick={next} disabled={!currentTrack || tracks.length === 0}>⏭</button>
 						</div>
 					</div>
 				</aside>
@@ -288,26 +541,28 @@ export default function App() {
 			<footer className="grid grid-cols-3 items-center gap-4 px-4 py-4 bg-neutral-900/80 backdrop-blur border-t border-neutral-800">
 				<audio
 					ref={audioRef}
-					src={getSrc(currentTrack)}
 					onTimeUpdate={onTimeUpdate}
-					onLoadedMetadata={onTimeUpdate}
-					onEnded={next}
 					preload="auto"
 				/>
 				<div className="flex items-center justify-center gap-3">
-					<button className="bg-neutral-700 text-white px-3 py-2 rounded-full" onClick={prev} title="Previous">⏮</button>
-					<button className="bg-neutral-700 text-white px-4 py-2 rounded-full text-lg" onClick={playPause} title="Play/Pause">{isPlaying ? '⏸' : '▶️'}</button>
-					<button className="bg-neutral-700 text-white px-3 py-2 rounded-full" onClick={next} title="Next">⏭</button>
+					<button className="bg-neutral-700 text-white px-3 py-2 rounded-full disabled:opacity-50" onClick={prev} title="Previous" disabled={!currentTrack || tracks.length === 0}>⏮</button>
+					<button className="bg-neutral-700 text-white px-4 py-2 rounded-full text-lg disabled:opacity-50" onClick={playPause} title="Play/Pause" disabled={!currentTrack || isLoading}>
+						{isLoading ? '⏳' : (isPlaying ? '⏸' : '▶️')}
+					</button>
+					<button className="bg-neutral-700 text-white px-3 py-2 rounded-full disabled:opacity-50" onClick={next} title="Next" disabled={!currentTrack || tracks.length === 0}>⏭</button>
 				</div>
 				<div className="flex items-center gap-2">
 					<span className="text-xs text-neutral-400">{formatTime(currentTime)}</span>
-					<input className="w-full" type="range" min="0" max={duration || 0} step="0.1" value={currentTime} onChange={onSeek} />
+					<input className="w-full" type="range" min="0" max={duration || 0} step="0.1" value={currentTime} onChange={onSeek} disabled={!currentTrack || isLoading} />
 					<span className="text-xs text-neutral-400">{formatTime(duration)}</span>
 				</div>
 				<div className="flex items-center gap-2 justify-end">
 					<span>🔊</span>
 					<input type="range" min="0" max="1" step="0.01" value={volume} onChange={onVolume} />
 				</div>
+				{loadError && (
+					<div className="col-span-3 text-xs text-red-400 text-center">{loadError}</div>
+				)}
 			</footer>
 		</div>
 	);
