@@ -57,12 +57,6 @@ BoomBox/
    - Search within specific playlists
    - Auto-switch to library view when searching
 
-5. **UI/UX**
-   - Dark theme with pink/emerald accents
-   - Ambient gradients and blur effects
-   - Two-panel layout: Explore (home) and Library
-   - Responsive grid layouts
-   - Hover interactions and visual feedback
 
 #### 🚧 Current Limitations
 - Only tested with MP3 files (other formats supported but not extensively tested)
@@ -123,28 +117,6 @@ window.boombox.readAudio(path)          // Read audio file as ArrayBuffer
   playlists: [{ id, name, trackIds }]
 }
 ```
-
-## Design System
-
-### Colors
-- **Background**: `neutral-950` (nearly black)
-- **Panels**: `neutral-900` with transparency
-- **Borders**: `neutral-800`, `neutral-700`
-- **Primary Actions**: `emerald-500`, `emerald-600`
-- **Accents**: Pink gradients, emerald glows
-- **Destructive**: Red tones (`red-900`, `red-800`)
-
-### Typography
-- **Font**: System default (no custom fonts)
-- **Headers**: `text-lg` to `text-4xl`, `font-semibold` to `font-extrabold`
-- **Body**: `text-sm`, `text-base`
-- **Monospace**: Time displays
-
-### Spacing
-- Consistent use of Tailwind spacing scale
-- `gap-2`, `gap-3`, `gap-4` for flex/grid
-- `px-3 py-2` for buttons
-- `p-4`, `p-6` for sections
 
 ## Development Commands
 ```bash
